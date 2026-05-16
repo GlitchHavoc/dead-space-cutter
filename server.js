@@ -1,10 +1,11 @@
 import { createServer } from "node:http";
-import { createReadStream, promises as fs } from "node:fs";
+import { createReadStream, createWriteStream, promises as fs } from "node:fs";
 import { extname, join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import sharp from "sharp";
+import Busboy from "busboy";
 
 const require = createRequire(import.meta.url);
 const ffmpegStatic = require("ffmpeg-static");
@@ -52,38 +53,40 @@ function run(cmd, args, onLine) {
 }
 
 async function parseMultipart(req) {
-  const contentType = req.headers["content-type"] || "";
-  const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.slice(1).find(Boolean);
-  if (!boundary) throw new Error("Missing multipart boundary");
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  const buffer = Buffer.concat(chunks);
-  const marker = Buffer.from(`--${boundary}`);
-  const out = { fields: {}, files: {} };
-  let pos = buffer.indexOf(marker);
-  while (pos !== -1) {
-    const next = buffer.indexOf(marker, pos + marker.length);
-    if (next === -1) break;
-    let part = buffer.subarray(pos + marker.length + 2, next - 2);
-    pos = next;
-    if (part.length < 4 || part.toString("utf8", 0, 2) === "--") continue;
-    const headerEnd = part.indexOf(Buffer.from("\r\n\r\n"));
-    if (headerEnd === -1) continue;
-    const headers = part.subarray(0, headerEnd).toString("utf8");
-    const body = part.subarray(headerEnd + 4);
-    const name = headers.match(/name="([^"]+)"/)?.[1];
-    const filename = headers.match(/filename="([^"]*)"/)?.[1];
-    if (!name) continue;
-    if (filename) {
-      const safeExt = extname(filename).replace(/[^.\w]/g, "") || ".mov";
+  return new Promise((resolve, reject) => {
+    const out = { fields: {}, files: {} };
+    const busboy = Busboy({ headers: req.headers });
+    const writes = [];
+
+    busboy.on("field", (name, value) => {
+      out.fields[name] = value;
+    });
+
+    busboy.on("file", (name, stream, info) => {
+      const safeExt = extname(info.filename || "").replace(/[^.\w]/g, "") || ".mov";
       const path = join(uploadsDir, `${randomUUID()}${safeExt}`);
-      await fs.writeFile(path, body);
-      out.files[name] = { path, filename };
-    } else {
-      out.fields[name] = body.toString("utf8");
-    }
-  }
-  return out;
+      out.files[name] = { path, filename: info.filename || `upload${safeExt}` };
+      writes.push(new Promise((fileResolve, fileReject) => {
+        const file = createWriteStream(path);
+        stream.pipe(file);
+        stream.on("error", fileReject);
+        file.on("error", fileReject);
+        file.on("finish", fileResolve);
+      }));
+    });
+
+    busboy.on("error", reject);
+    busboy.on("finish", async () => {
+      try {
+        await Promise.all(writes);
+        resolve(out);
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    req.pipe(busboy);
+  });
 }
 
 async function getDuration(input) {
@@ -316,7 +319,7 @@ async function processJob(id, file, fields) {
       args.push("-filter_complex", filterParts.join(";"), "-map", videoMap, "-map", audioMap);
     }
 
-    args.push("-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-c:a", "aac", "-b:a", "192k", output);
+    args.push("-threads", "1", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-c:a", "aac", "-b:a", "128k", output);
     job.log.push(`ffmpeg ${args.join(" ")}`);
     await run(ffmpeg, args, (line) => {
       if (/time=|silence|thumbnail/.test(line)) job.log.push(line);
