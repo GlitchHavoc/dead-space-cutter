@@ -292,6 +292,7 @@ async function processJob(id, file, fields) {
 
     const captionFiles = captions.length ? await writeCaptionImages(id, captions, fields, job) : [];
 
+    await fs.mkdir(outputsDir, { recursive: true });
     job.status = "rendering";
     const output = join(outputsDir, `${id}-dead-space-cut.mp4`);
     const args = ["-y", "-i", file.path];
