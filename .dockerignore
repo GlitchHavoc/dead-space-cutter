@@ -1,0 +1,10 @@
+.git
+node_modules
+uploads
+outputs
+*.mp4
+*.mov
+*.MOV
+*.png
+.DS_Store
+.env

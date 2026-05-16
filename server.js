@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 const root = new URL(".", import.meta.url).pathname;
 const publicDir = join(root, "public");
 const uploadsDir = join(root, "uploads");
-const outputsDir = process.env.OUTPUTS_DIR || "/Users/strife/Desktop/Dead Space Cutter Exports";
+const outputsDir = process.env.OUTPUTS_DIR || join(root, "outputs");
 const ffmpeg = process.env.FFMPEG || "ffmpeg";
 const ffprobe = process.env.FFPROBE || "ffprobe";
 
@@ -183,11 +183,16 @@ async function writeCaptionImages(id, captions, fields, job) {
   const paths = [];
   for (let i = 0; i < captions.length; i += 1) {
     const svg = join(outputsDir, `${id}-caption-${i}.svg`);
+    const png = `${svg}.png`;
     await fs.writeFile(svg, viralCaptionSvg(captions[i], fields), "utf8");
-    await run("qlmanage", ["-t", "-s", String(fields._videoWidth || 1080), "-o", outputsDir, svg], (line) => {
-      if (/produced|thumbnail/i.test(line)) job.log.push(line);
-    });
-    paths.push(`${svg}.png`);
+    if (process.platform === "darwin") {
+      await run("qlmanage", ["-t", "-s", String(fields._videoWidth || 1080), "-o", outputsDir, svg], (line) => {
+        if (/produced|thumbnail/i.test(line)) job.log.push(line);
+      });
+    } else {
+      await run("rsvg-convert", ["-w", String(fields._videoWidth || 1080), "-o", png, svg], (line) => job.log.push(line));
+    }
+    paths.push(png);
   }
   return paths;
 }
@@ -362,6 +367,9 @@ const server = createServer(async (req, res) => {
 });
 
 
-server.listen(5177, "127.0.0.1", () => {
-  console.log("Dead Space Cutter running at http://127.0.0.1:5177");
+const port = Number(process.env.PORT || 5177);
+const host = process.env.PORT ? "0.0.0.0" : "127.0.0.1";
+
+server.listen(port, host, () => {
+  console.log(`Dead Space Cutter running at http://${host}:${port}`);
 });
