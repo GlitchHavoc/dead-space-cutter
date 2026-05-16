@@ -3,13 +3,19 @@ import { createReadStream, promises as fs } from "node:fs";
 import { extname, join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import sharp from "sharp";
+
+const require = createRequire(import.meta.url);
+const ffmpegStatic = require("ffmpeg-static");
+const ffprobeStatic = require("ffprobe-static");
 
 const root = new URL(".", import.meta.url).pathname;
 const publicDir = join(root, "public");
 const uploadsDir = join(root, "uploads");
 const outputsDir = process.env.OUTPUTS_DIR || join(root, "outputs");
-const ffmpeg = process.env.FFMPEG || "ffmpeg";
-const ffprobe = process.env.FFPROBE || "ffprobe";
+const ffmpeg = process.env.FFMPEG || ffmpegStatic || "ffmpeg";
+const ffprobe = process.env.FFPROBE || ffprobeStatic.path || "ffprobe";
 
 await fs.mkdir(uploadsDir, { recursive: true });
 await fs.mkdir(outputsDir, { recursive: true });
@@ -182,16 +188,10 @@ function viralCaptionSvg(caption, fields) {
 async function writeCaptionImages(id, captions, fields, job) {
   const paths = [];
   for (let i = 0; i < captions.length; i += 1) {
-    const svg = join(outputsDir, `${id}-caption-${i}.svg`);
-    const png = `${svg}.png`;
-    await fs.writeFile(svg, viralCaptionSvg(captions[i], fields), "utf8");
-    if (process.platform === "darwin") {
-      await run("qlmanage", ["-t", "-s", String(fields._videoWidth || 1080), "-o", outputsDir, svg], (line) => {
-        if (/produced|thumbnail/i.test(line)) job.log.push(line);
-      });
-    } else {
-      await run("rsvg-convert", ["-w", String(fields._videoWidth || 1080), "-o", png, svg], (line) => job.log.push(line));
-    }
+    const svg = viralCaptionSvg(captions[i], fields);
+    const png = join(outputsDir, `${id}-caption-${i}.png`);
+    await sharp(Buffer.from(svg)).png().toFile(png);
+    job.log.push(`Rendered caption ${i + 1}/${captions.length}`);
     paths.push(png);
   }
   return paths;
