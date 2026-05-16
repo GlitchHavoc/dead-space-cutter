@@ -183,11 +183,16 @@ async function writeCaptionImages(id, captions, fields, job) {
   const paths = [];
   for (let i = 0; i < captions.length; i += 1) {
     const svg = join(outputsDir, `${id}-caption-${i}.svg`);
+    const png = `${svg}.png`;
     await fs.writeFile(svg, viralCaptionSvg(captions[i], fields), "utf8");
-    await run("qlmanage", ["-t", "-s", String(fields._videoWidth || 1080), "-o", outputsDir, svg], (line) => {
-      if (/produced|thumbnail/i.test(line)) job.log.push(line);
-    });
-    paths.push(`${svg}.png`);
+    if (process.platform === "darwin") {
+      await run("qlmanage", ["-t", "-s", String(fields._videoWidth || 1080), "-o", outputsDir, svg], (line) => {
+        if (/produced|thumbnail/i.test(line)) job.log.push(line);
+      });
+    } else {
+      await run("rsvg-convert", ["-w", String(fields._videoWidth || 1080), "-o", png, svg], (line) => job.log.push(line));
+    }
+    paths.push(png);
   }
   return paths;
 }
