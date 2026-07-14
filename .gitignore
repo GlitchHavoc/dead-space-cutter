@@ -1,0 +1,9 @@
+.DS_Store
+watch-and-cut.log
+*.processing.mp4
+Drop Videos Here/*
+Paused inputs/*
+edited/*
+!Drop Videos Here/.gitkeep
+!Paused inputs/.gitkeep
+!edited/.gitkeep

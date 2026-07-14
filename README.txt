@@ -1,0 +1,1 @@
+Drop videos into the 'Drop Videos Here' folder. Dead Space Cutter will auto-cut dead space and place finished MP4s in the 'edited' folder. It checks for finished drops about once per second and uses clean hardware-rendered cuts to avoid frozen frames. Keep this app running while it works.
