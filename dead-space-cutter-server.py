@@ -113,31 +113,41 @@ class Handler(SimpleHTTPRequestHandler):
             'REQUEST_METHOD': 'POST',
             'CONTENT_TYPE': self.headers.get('Content-Type', ''),
         })
-        item = form['video'] if 'video' in form else None
-        if item is None or not getattr(item, 'filename', ''):
+        items = form['video'] if 'video' in form else []
+        if not isinstance(items, list):
+            items = [items]
+        items = [item for item in items if getattr(item, 'filename', '')]
+        if not items:
             self.send_json({'error': 'No video was uploaded.'}, status=400)
             return
 
-        target = unique_upload_path(item.filename)
-        with target.open('wb') as f:
-            while True:
-                chunk = item.file.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
+        targets = []
+        for item in items:
+            target = unique_upload_path(item.filename)
+            with target.open('wb') as f:
+                while True:
+                    chunk = item.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            targets.append(target)
 
+        processed = []
         with LOCK:
-            try:
-                out, stats = process_path(target)
-            except Exception as exc:
-                cutter.log(f"ERROR {type(exc).__name__}: {exc}")
-                self.send_json({'error': str(exc)}, status=500)
-                return
+            for target in targets:
+                try:
+                    out, stats = process_path(target)
+                    processed.append({'input': target.name, 'output': out.name, 'stats': stats})
+                except Exception as exc:
+                    cutter.log(f"ERROR {type(exc).__name__}: {exc}")
+                    self.send_json({'error': f"{target.name}: {exc}"}, status=500)
+                    return
+
+        noun = 'video' if len(processed) == 1 else 'videos'
 
         self.send_json({
-            'message': f"Edited {target.name} in {stats['output_duration']:.1f}s output",
-            'output': out.name,
-            'stats': stats,
+            'message': f"Edited {len(processed)} {noun}",
+            'processed': processed,
         })
 
     def handle_process_existing(self):

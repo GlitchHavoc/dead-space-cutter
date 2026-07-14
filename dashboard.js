@@ -14,8 +14,8 @@ const els = {
 
 els.dropZone.addEventListener("click", () => els.videoInput.click());
 els.videoInput.addEventListener("change", () => {
-  const [file] = els.videoInput.files || [];
-  if (file) uploadVideo(file);
+  const files = Array.from(els.videoInput.files || []);
+  if (files.length) uploadVideos(files);
   els.videoInput.value = "";
 });
 els.refreshBtn.addEventListener("click", refreshStatus);
@@ -36,25 +36,37 @@ els.processExistingBtn.addEventListener("click", processExisting);
 });
 
 els.dropZone.addEventListener("drop", (event) => {
-  const [file] = event.dataTransfer.files || [];
-  if (file) uploadVideo(file);
+  const files = Array.from(event.dataTransfer.files || []);
+  if (files.length) uploadVideos(files);
 });
 
-async function uploadVideo(file) {
-  setBusy(true, `Editing ${file.name}...`);
+async function uploadVideos(files) {
+  const videoFiles = files.filter(isVideoFile);
+  if (!videoFiles.length) {
+    setStatus("No supported video files found");
+    return;
+  }
+
+  const label = videoFiles.length === 1 ? videoFiles[0].name : `${videoFiles.length} videos`;
+  setBusy(true, `Editing ${label}...`);
   const body = new FormData();
-  body.append("video", file);
+  videoFiles.forEach((file) => body.append("video", file));
 
   try {
     const response = await fetch("/api/upload", { method: "POST", body });
     const result = await readJson(response);
-    setStatus(result.message || "Video edited");
+    setStatus(result.message || "Videos edited");
   } catch (error) {
     setStatus(error.message || "Upload failed");
   } finally {
     setBusy(false);
     refreshStatus();
   }
+}
+
+function isVideoFile(file) {
+  if (file.type?.startsWith("video/")) return true;
+  return /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(file.name);
 }
 
 async function processExisting() {
