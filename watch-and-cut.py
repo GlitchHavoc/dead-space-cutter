@@ -35,6 +35,20 @@ POLL_SECONDS = 1
 VIDEO_CODEC = os.environ.get('VIDEO_CODEC') or 'h264_videotoolbox'
 VIDEO_BITRATE = os.environ.get('VIDEO_BITRATE') or '8M'
 RENDER_MODE = os.environ.get('RENDER_MODE') or 'encode'
+WORD_AWARE = os.environ.get('WORD_AWARE', '1') != '0'
+WHISPER_MODEL_NAME = os.environ.get('WHISPER_MODEL') or 'base'
+WORD_LEAD_BUFFER = 0.10
+WORD_POST_BUFFER = 0.22
+WORD_PRE_BUFFER = 0.12
+WORD_FINAL_BUFFER = 0.45
+WORD_MIN_REMOVED_CUT = 0.15
+WORD_MINIMUM_KEEP_SEGMENT = 0.85
+WHISPER_MODEL = None
+WORD_PROFILE = {
+    'name': 'word-aware',
+    'minimum_keep_segment': WORD_MINIMUM_KEEP_SEGMENT,
+    'minimum_removed_cut': WORD_MIN_REMOVED_CUT,
+}
 CUT_PROFILES = [
     {
         'name': 'word-safe',
@@ -169,6 +183,145 @@ def detect_silences(path, total, profile=None):
     log(f"Profile {profile['name']}: detected {len(silences)} silence gap(s), removable {sum(b - a for a, b in removed):.2f}s")
     return silences
 
+def extract_audio_for_words(path, wav_path):
+    subprocess.check_call([
+        FFMPEG, '-nostdin', '-loglevel', 'error', '-y',
+        '-i', str(path),
+        '-vn', '-ac', '1', '-ar', '16000',
+        str(wav_path),
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+def load_whisper_model():
+    global WHISPER_MODEL
+    if WHISPER_MODEL is not None:
+        return WHISPER_MODEL
+    from faster_whisper import WhisperModel
+    log(f"Loading word listener model ({WHISPER_MODEL_NAME})")
+    WHISPER_MODEL = WhisperModel(WHISPER_MODEL_NAME, device='cpu', compute_type='int8')
+    return WHISPER_MODEL
+
+def transcribe_words(path):
+    if not WORD_AWARE:
+        return []
+    try:
+        with tempfile.TemporaryDirectory(prefix='dead-space-words-') as temp_dir:
+            wav_path = Path(temp_dir) / 'audio.wav'
+            extract_audio_for_words(path, wav_path)
+            model = load_whisper_model()
+            segments, _ = model.transcribe(str(wav_path), word_timestamps=True, vad_filter=False)
+            words = []
+            for segment in segments:
+                for word in segment.words or []:
+                    if word.start is None or word.end is None:
+                        continue
+                    text = (word.word or '').strip()
+                    if text:
+                        words.append((float(word.start), float(word.end), text))
+            words.sort(key=lambda item: item[0])
+            log(f"Word listener found {len(words)} word timestamp(s)")
+            return words
+    except Exception as exc:
+        log(f"Word listener unavailable; using silence only ({type(exc).__name__}: {exc})")
+        return []
+
+def merge_intervals(intervals):
+    merged = []
+    for a, b in sorted((a, b) for a, b in intervals if b > a):
+        if merged and a <= merged[-1][1] + 0.005:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+def keep_from_removed(total, removed):
+    keeps = []
+    cur = 0.0
+    for a, b in removed:
+        if a > cur:
+            keeps.append((cur, a))
+        cur = max(cur, b)
+    if cur < total:
+        keeps.append((cur, total))
+    keeps = [(a, b) for a, b in keeps if b - a > 0.04]
+    return keeps or [(0, total)]
+
+def word_protected_intervals(words, total):
+    protected = []
+    for start, end, _ in words:
+        protected.append((max(0, start - WORD_LEAD_BUFFER), min(total, end + WORD_POST_BUFFER)))
+    return merge_intervals(protected)
+
+def subtract_protected_intervals(cut, protected):
+    pieces = [cut]
+    for protect_start, protect_end in protected:
+        next_pieces = []
+        for start, end in pieces:
+            if protect_end <= start or protect_start >= end:
+                next_pieces.append((start, end))
+                continue
+            if start < protect_start:
+                next_pieces.append((start, protect_start))
+            if protect_end < end:
+                next_pieces.append((protect_end, end))
+        pieces = next_pieces
+        if not pieces:
+            break
+    return pieces
+
+def clamp_removals_away_from_words(removals, words, total, profile=None):
+    profile = profile or WORD_PROFILE
+    protected = word_protected_intervals(words, total)
+    safe = []
+    for cut in removals:
+        safe.extend(subtract_protected_intervals(cut, protected))
+    safe = [(max(0, a), min(total, b)) for a, b in safe if b - a >= profile['minimum_removed_cut']]
+    safe = merge_intervals(safe)
+    safe = remove_fragmenting_cuts(total, safe, profile)
+    safe = smooth_cut_cadence(total, safe)
+    return safe
+
+def word_gap_removals(words, total):
+    if not words:
+        return []
+
+    removals = []
+    first_start = max(0, words[0][0] - WORD_LEAD_BUFFER)
+    if first_start >= WORD_MIN_REMOVED_CUT:
+        removals.append((0, first_start))
+
+    for prev_word, next_word in zip(words, words[1:]):
+        prev_end = prev_word[1]
+        next_start = next_word[0]
+        start = prev_end + WORD_POST_BUFFER
+        end = next_start - WORD_PRE_BUFFER
+        if end - start >= WORD_MIN_REMOVED_CUT:
+            removals.append((start, end))
+
+    final_start = words[-1][1] + WORD_FINAL_BUFFER
+    if total - final_start >= WORD_MIN_REMOVED_CUT:
+        removals.append((final_start, total))
+
+    removals = merge_intervals((max(0, a), min(total, b)) for a, b in removals)
+    removals = remove_fragmenting_cuts(total, removals, WORD_PROFILE)
+    removals = smooth_cut_cadence(total, removals)
+    return removals
+
+def word_aware_candidate(total, words, base_removed=None):
+    removals = word_gap_removals(words, total)
+    if base_removed:
+        removals = merge_intervals(removals + clamp_removals_away_from_words(base_removed, words, total, WORD_PROFILE))
+        removals = remove_fragmenting_cuts(total, removals, WORD_PROFILE)
+        removals = smooth_cut_cadence(total, removals)
+    keeps = keep_from_removed(total, removals)
+    return {
+        'profile': WORD_PROFILE,
+        'silences': [],
+        'keeps': keeps,
+        'removed': removals,
+        'removed_seconds': removed_seconds(removals),
+        'words': words,
+    }
+
 def keep_intervals(total, silences, profile=None):
     profile = profile or default_profile()
     remove = []
@@ -183,26 +336,10 @@ def keep_intervals(total, silences, profile=None):
             remove.append((start + profile['keep_each_side'], end - profile['keep_each_side']))
     remove = [(a, b) for a, b in remove if b - a >= profile['minimum_removed_cut']]
     remove.sort()
-    merged = []
-    for a, b in remove:
-        if b <= a:
-            continue
-        if merged and a <= merged[-1][1] + 0.005:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
-        else:
-            merged.append((a, b))
+    merged = merge_intervals(remove)
     merged = remove_fragmenting_cuts(total, merged, profile)
     merged = smooth_cut_cadence(total, merged)
-    keeps = []
-    cur = 0.0
-    for a, b in merged:
-        if a > cur:
-            keeps.append((cur, a))
-        cur = max(cur, b)
-    if cur < total:
-        keeps.append((cur, total))
-    keeps = [(a, b) for a, b in keeps if b - a > 0.04]
-    return keeps or [(0, total)], merged
+    return keep_from_removed(total, merged), merged
 
 def remove_fragmenting_cuts(total, remove, profile=None):
     profile = profile or default_profile()
@@ -273,15 +410,28 @@ def target_removed_seconds(total):
 def choose_cut_plan(path, total):
     target = target_removed_seconds(total)
     best = None
+    words = transcribe_words(path)
+    if words:
+        word_candidate = word_aware_candidate(total, words)
+        best = word_candidate
+        log(f"Word-aware gaps remove {word_candidate['removed_seconds']:.2f}s before silence assist; target is {target:.2f}s")
+
     for profile in CUT_PROFILES:
         silences = detect_silences(path, total, profile)
         keeps, removed = keep_intervals(total, silences, profile)
+        if words:
+            removed = merge_intervals(word_gap_removals(words, total) + clamp_removals_away_from_words(removed, words, total, WORD_PROFILE))
+            removed = remove_fragmenting_cuts(total, removed, WORD_PROFILE)
+            removed = smooth_cut_cadence(total, removed)
+            keeps = keep_from_removed(total, removed)
+            profile = WORD_PROFILE
         candidate = {
             'profile': profile,
             'silences': silences,
             'keeps': keeps,
             'removed': removed,
             'removed_seconds': removed_seconds(removed),
+            'words': words,
         }
         if best is None or candidate['removed_seconds'] > best['removed_seconds']:
             best = candidate
