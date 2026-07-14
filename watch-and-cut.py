@@ -24,12 +24,65 @@ FINAL_MINIMUM_REMOVABLE_GAP = 0.85
 FINAL_EDGE_TRIM_PADDING = 0.65
 MINIMUM_KEEP_SEGMENT = 1.50
 MINIMUM_REMOVED_CUT = 0.35
+TARGET_REMOVED_RATIO = 0.05
+TARGET_REMOVED_MIN = 1.00
+TARGET_REMOVED_MAX = 4.00
 FADE = 0.020
 DETECT_TIMEOUT_PER_MINUTE = 20
 POLL_SECONDS = 1
 VIDEO_CODEC = os.environ.get('VIDEO_CODEC') or 'h264_videotoolbox'
 VIDEO_BITRATE = os.environ.get('VIDEO_BITRATE') or '8M'
 RENDER_MODE = os.environ.get('RENDER_MODE') or 'encode'
+CUT_PROFILES = [
+    {
+        'name': 'word-safe',
+        'noise': '-18dB',
+        'minimum_silence': 0.60,
+        'keep_each_side': 0.32,
+        'edge_trim_padding': 0.25,
+        'minimum_removable_gap': 0.60,
+        'final_minimum_removable_gap': 0.85,
+        'final_edge_trim_padding': 0.65,
+        'minimum_keep_segment': 1.50,
+        'minimum_removed_cut': 0.35,
+    },
+    {
+        'name': 'balanced',
+        'noise': '-18dB',
+        'minimum_silence': 0.55,
+        'keep_each_side': 0.24,
+        'edge_trim_padding': 0.25,
+        'minimum_removable_gap': 0.55,
+        'final_minimum_removable_gap': 0.75,
+        'final_edge_trim_padding': 0.55,
+        'minimum_keep_segment': 1.25,
+        'minimum_removed_cut': 0.25,
+    },
+    {
+        'name': 'strong',
+        'noise': '-17dB',
+        'minimum_silence': 0.50,
+        'keep_each_side': 0.22,
+        'edge_trim_padding': 0.22,
+        'minimum_removable_gap': 0.50,
+        'final_minimum_removable_gap': 0.70,
+        'final_edge_trim_padding': 0.50,
+        'minimum_keep_segment': 1.10,
+        'minimum_removed_cut': 0.20,
+    },
+    {
+        'name': 'hard',
+        'noise': '-16dB',
+        'minimum_silence': 0.45,
+        'keep_each_side': 0.20,
+        'edge_trim_padding': 0.20,
+        'minimum_removable_gap': 0.45,
+        'final_minimum_removable_gap': 0.65,
+        'final_edge_trim_padding': 0.45,
+        'minimum_keep_segment': 1.00,
+        'minimum_removed_cut': 0.18,
+    },
+]
 
 INBOX.mkdir(parents=True, exist_ok=True)
 OUTBOX.mkdir(parents=True, exist_ok=True)
@@ -70,9 +123,13 @@ def duration(path):
     out = subprocess.check_output([FFPROBE, '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nk=1:nw=1', str(path)], text=True).strip()
     return float(out)
 
-def detect_silences(path, total):
+def default_profile():
+    return CUT_PROFILES[0]
+
+def detect_silences(path, total, profile=None):
+    profile = profile or default_profile()
     timeout = max(120, int(total / 60 * DETECT_TIMEOUT_PER_MINUTE + 60))
-    proc = subprocess.run([FFMPEG, '-nostdin', '-hide_banner', '-i', str(path), '-vn', '-af', f'silencedetect=noise={SILENCE_NOISE}:d={MINIMUM_SILENCE}', '-f', 'null', '-'], text=True, capture_output=True, timeout=timeout)
+    proc = subprocess.run([FFMPEG, '-nostdin', '-hide_banner', '-i', str(path), '-vn', '-af', f"silencedetect=noise={profile['noise']}:d={profile['minimum_silence']}", '-f', 'null', '-'], text=True, capture_output=True, timeout=timeout)
     starts = []
     silences = []
     for line in (proc.stderr + proc.stdout).splitlines():
@@ -82,22 +139,23 @@ def detect_silences(path, total):
         m = re.search(r'silence_end: ([0-9.]+) \| silence_duration: ([0-9.]+)', line)
         if m and starts:
             silences.append((starts.pop(0), float(m.group(1)), float(m.group(2))))
-    _, removed = keep_intervals(total, silences)
-    log(f"Detected {len(silences)} silence gap(s) in one speech-safe pass, removable {sum(b - a for a, b in removed):.2f}s")
+    _, removed = keep_intervals(total, silences, profile)
+    log(f"Profile {profile['name']}: detected {len(silences)} silence gap(s), removable {sum(b - a for a, b in removed):.2f}s")
     return silences
 
-def keep_intervals(total, silences):
+def keep_intervals(total, silences, profile=None):
+    profile = profile or default_profile()
     remove = []
     for start, end, gap in silences:
         if start <= 0.02:
-            if gap >= MINIMUM_REMOVABLE_GAP:
-                remove.append((0, max(0, end - EDGE_TRIM_PADDING)))
+            if gap >= profile['minimum_removable_gap']:
+                remove.append((0, max(0, end - profile['edge_trim_padding'])))
         elif end >= total - 0.02:
-            if gap >= FINAL_MINIMUM_REMOVABLE_GAP:
-                remove.append((min(total, start + FINAL_EDGE_TRIM_PADDING), total))
-        elif gap >= max(MINIMUM_REMOVABLE_GAP, KEEP_EACH_SIDE * 2 + 0.03):
-            remove.append((start + KEEP_EACH_SIDE, end - KEEP_EACH_SIDE))
-    remove = [(a, b) for a, b in remove if b - a >= MINIMUM_REMOVED_CUT]
+            if gap >= profile['final_minimum_removable_gap']:
+                remove.append((min(total, start + profile['final_edge_trim_padding']), total))
+        elif gap >= max(profile['minimum_removable_gap'], profile['keep_each_side'] * 2 + 0.03):
+            remove.append((start + profile['keep_each_side'], end - profile['keep_each_side']))
+    remove = [(a, b) for a, b in remove if b - a >= profile['minimum_removed_cut']]
     remove.sort()
     merged = []
     for a, b in remove:
@@ -107,7 +165,7 @@ def keep_intervals(total, silences):
             merged[-1] = (merged[-1][0], max(merged[-1][1], b))
         else:
             merged.append((a, b))
-    merged = remove_fragmenting_cuts(total, merged)
+    merged = remove_fragmenting_cuts(total, merged, profile)
     keeps = []
     cur = 0.0
     for a, b in merged:
@@ -119,11 +177,12 @@ def keep_intervals(total, silences):
     keeps = [(a, b) for a, b in keeps if b - a > 0.04]
     return keeps or [(0, total)], merged
 
-def remove_fragmenting_cuts(total, remove):
+def remove_fragmenting_cuts(total, remove, profile=None):
+    profile = profile or default_profile()
     filtered = list(remove)
     while True:
         keeps = keep_segments_from_removals(total, filtered)
-        tiny = next(((index, a, b) for index, (a, b) in enumerate(keeps) if 0 < b - a < MINIMUM_KEEP_SEGMENT), None)
+        tiny = next(((index, a, b) for index, (a, b) in enumerate(keeps) if 0 < b - a < profile['minimum_keep_segment']), None)
         if tiny is None:
             return filtered
 
@@ -148,6 +207,33 @@ def keep_segments_from_removals(total, remove):
     if cur < total:
         keeps.append((cur, total))
     return keeps
+
+def removed_seconds(removed):
+    return sum(b - a for a, b in removed)
+
+def target_removed_seconds(total):
+    return min(TARGET_REMOVED_MAX, max(TARGET_REMOVED_MIN, total * TARGET_REMOVED_RATIO))
+
+def choose_cut_plan(path, total):
+    target = target_removed_seconds(total)
+    best = None
+    for profile in CUT_PROFILES:
+        silences = detect_silences(path, total, profile)
+        keeps, removed = keep_intervals(total, silences, profile)
+        candidate = {
+            'profile': profile,
+            'silences': silences,
+            'keeps': keeps,
+            'removed': removed,
+            'removed_seconds': removed_seconds(removed),
+        }
+        if best is None or candidate['removed_seconds'] > best['removed_seconds']:
+            best = candidate
+        if candidate['removed_seconds'] >= target:
+            log(f"Selected {profile['name']} profile for {candidate['removed_seconds']:.2f}s removed; target was {target:.2f}s")
+            return candidate
+    log(f"Selected {best['profile']['name']} profile for best available {best['removed_seconds']:.2f}s removed; target was {target:.2f}s")
+    return best
 
 def encode_render(path, out, keeps):
     expr = '+'.join(f"between(t\\,{a:.6f}\\,{b:.6f})" for a, b in keeps)
@@ -192,9 +278,10 @@ def copy_render(path, out, keeps):
 
 def render(path, out):
     total = duration(path)
-    silences = detect_silences(path, total)
-    keeps, removed = keep_intervals(total, silences)
-    log(f"Rendering {path.name}: {len(keeps)} kept segment(s), removing {sum(b - a for a, b in removed):.2f}s")
+    plan = choose_cut_plan(path, total)
+    keeps = plan['keeps']
+    removed = plan['removed']
+    log(f"Rendering {path.name}: {len(keeps)} kept segment(s), removing {plan['removed_seconds']:.2f}s with {plan['profile']['name']} profile")
     try:
         if RENDER_MODE == 'copy':
             copy_render(path, out, keeps)
