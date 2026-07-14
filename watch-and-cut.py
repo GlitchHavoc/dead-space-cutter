@@ -24,11 +24,11 @@ FINAL_MINIMUM_REMOVABLE_GAP = 0.85
 FINAL_EDGE_TRIM_PADDING = 0.65
 MINIMUM_KEEP_SEGMENT = 1.50
 MINIMUM_REMOVED_CUT = 0.35
-TARGET_REMOVED_RATIO = 0.05
-TARGET_REMOVED_MIN = 1.00
-TARGET_REMOVED_MAX = 4.00
-MAX_CUTS_PER_MINUTE = 8
-MIN_TIME_BETWEEN_CUTS = 1.20
+TARGET_REMOVED_RATIO = 0.15
+TARGET_REMOVED_MIN = 2.00
+TARGET_REMOVED_MAX = 8.00
+MAX_CUTS_PER_MINUTE = 18
+MIN_TIME_BETWEEN_CUTS = 0.45
 FADE = 0.020
 DETECT_TIMEOUT_PER_MINUTE = 20
 POLL_SECONDS = 1
@@ -83,6 +83,30 @@ CUT_PROFILES = [
         'final_edge_trim_padding': 0.52,
         'minimum_keep_segment': 1.00,
         'minimum_removed_cut': 0.18,
+    },
+    {
+        'name': 'auto-cut',
+        'noise': '-15dB',
+        'minimum_silence': 0.40,
+        'keep_each_side': 0.18,
+        'edge_trim_padding': 0.18,
+        'minimum_removable_gap': 0.40,
+        'final_minimum_removable_gap': 0.55,
+        'final_edge_trim_padding': 0.35,
+        'minimum_keep_segment': 0.85,
+        'minimum_removed_cut': 0.15,
+    },
+    {
+        'name': 'max-cut',
+        'noise': '-14dB',
+        'minimum_silence': 0.35,
+        'keep_each_side': 0.16,
+        'edge_trim_padding': 0.16,
+        'minimum_removable_gap': 0.35,
+        'final_minimum_removable_gap': 0.50,
+        'final_edge_trim_padding': 0.32,
+        'minimum_keep_segment': 0.75,
+        'minimum_removed_cut': 0.12,
     },
 ]
 
