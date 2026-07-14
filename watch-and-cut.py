@@ -15,13 +15,14 @@ LOG = ROOT / 'watch-and-cut.log'
 FFMPEG = os.environ.get('FFMPEG') or shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
 FFPROBE = os.environ.get('FFPROBE') or shutil.which('ffprobe') or '/opt/homebrew/bin/ffprobe'
 VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.webm', '.avi', '.mkv'}
-SILENCE_NOISE = '-20dB'
-MINIMUM_SILENCE = 0.50
-KEEP_EACH_SIDE = 0.18
-EDGE_TRIM_PADDING = 0.18
-MINIMUM_REMOVABLE_GAP = 0.50
+SILENCE_NOISE = '-22dB'
+MINIMUM_SILENCE = 0.70
+KEEP_EACH_SIDE = 0.32
+EDGE_TRIM_PADDING = 0.25
+MINIMUM_REMOVABLE_GAP = 0.70
 FINAL_MINIMUM_REMOVABLE_GAP = 0.75
-FINAL_EDGE_TRIM_PADDING = 0.45
+FINAL_EDGE_TRIM_PADDING = 0.55
+MINIMUM_KEEP_SEGMENT = 1.25
 FADE = 0.020
 DETECT_TIMEOUT_PER_MINUTE = 20
 POLL_SECONDS = 1
@@ -104,6 +105,7 @@ def keep_intervals(total, silences):
             merged[-1] = (merged[-1][0], max(merged[-1][1], b))
         else:
             merged.append((a, b))
+    merged = remove_fragmenting_cuts(total, merged)
     keeps = []
     cur = 0.0
     for a, b in merged:
@@ -114,6 +116,36 @@ def keep_intervals(total, silences):
         keeps.append((cur, total))
     keeps = [(a, b) for a, b in keeps if b - a > 0.04]
     return keeps or [(0, total)], merged
+
+def remove_fragmenting_cuts(total, remove):
+    filtered = list(remove)
+    while True:
+        keeps = keep_segments_from_removals(total, filtered)
+        tiny = next(((index, a, b) for index, (a, b) in enumerate(keeps) if 0 < b - a < MINIMUM_KEEP_SEGMENT), None)
+        if tiny is None:
+            return filtered
+
+        keep_index, _, _ = tiny
+        drop_indexes = []
+        if keep_index > 0:
+            drop_indexes.append(keep_index - 1)
+        if keep_index < len(filtered):
+            drop_indexes.append(keep_index)
+        if not drop_indexes:
+            return filtered
+
+        filtered = [item for index, item in enumerate(filtered) if index not in set(drop_indexes)]
+
+def keep_segments_from_removals(total, remove):
+    keeps = []
+    cur = 0.0
+    for a, b in remove:
+        if a > cur:
+            keeps.append((cur, a))
+        cur = max(cur, b)
+    if cur < total:
+        keeps.append((cur, total))
+    return keeps
 
 def encode_render(path, out, keeps):
     expr = '+'.join(f"between(t\\,{a:.6f}\\,{b:.6f})" for a, b in keeps)
