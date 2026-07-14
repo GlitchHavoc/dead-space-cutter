@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dead Space Cutter</title>
+    <link rel="stylesheet" href="./dashboard.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel">
+        <header class="topbar">
+          <div>
+            <h1>Dead Space Cutter</h1>
+            <p>Drop in a video, cut silent dead space, and get the edited MP4.</p>
+          </div>
+          <button id="refreshBtn" type="button">Refresh</button>
+        </header>
+
+        <section class="upload-zone" id="dropZone">
+          <input id="videoInput" type="file" accept="video/*,.mp4,.mov,.m4v,.webm,.avi,.mkv" />
+          <strong>Choose a video or drag it here</strong>
+          <span>Clean rendered cuts, no frozen frames. Videos save to the edited folder.</span>
+        </section>
+
+        <div class="actions">
+          <button id="processExistingBtn" type="button">Process videos already in Drop Videos Here</button>
+          <span id="statusText">Ready</span>
+        </div>
+
+        <section class="grid">
+          <div class="list-card">
+            <div class="card-head">
+              <h2>Drop Folder</h2>
+              <span id="dropCount">0</span>
+            </div>
+            <ol id="dropList" class="file-list"></ol>
+          </div>
+
+          <div class="list-card">
+            <div class="card-head">
+              <h2>Edited Videos</h2>
+              <span id="editedCount">0</span>
+            </div>
+            <ol id="editedList" class="file-list"></ol>
+          </div>
+        </section>
+
+        <section class="log-card">
+          <div class="card-head">
+            <h2>Recent Activity</h2>
+            <span id="lastUpdated">Not loaded</span>
+          </div>
+          <pre id="logText"></pre>
+        </section>
+      </section>
+    </main>
+
+    <script src="./dashboard.js"></script>
+  </body>
+</html>
