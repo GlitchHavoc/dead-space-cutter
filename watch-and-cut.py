@@ -27,6 +27,8 @@ MINIMUM_REMOVED_CUT = 0.35
 TARGET_REMOVED_RATIO = 0.05
 TARGET_REMOVED_MIN = 1.00
 TARGET_REMOVED_MAX = 4.00
+MAX_CUTS_PER_MINUTE = 8
+MIN_TIME_BETWEEN_CUTS = 1.20
 FADE = 0.020
 DETECT_TIMEOUT_PER_MINUTE = 20
 POLL_SECONDS = 1
@@ -38,11 +40,11 @@ CUT_PROFILES = [
         'name': 'word-safe',
         'noise': '-18dB',
         'minimum_silence': 0.60,
-        'keep_each_side': 0.32,
+        'keep_each_side': 0.40,
         'edge_trim_padding': 0.25,
         'minimum_removable_gap': 0.60,
         'final_minimum_removable_gap': 0.85,
-        'final_edge_trim_padding': 0.65,
+        'final_edge_trim_padding': 0.75,
         'minimum_keep_segment': 1.50,
         'minimum_removed_cut': 0.35,
     },
@@ -50,11 +52,11 @@ CUT_PROFILES = [
         'name': 'balanced',
         'noise': '-18dB',
         'minimum_silence': 0.55,
-        'keep_each_side': 0.24,
+        'keep_each_side': 0.34,
         'edge_trim_padding': 0.25,
         'minimum_removable_gap': 0.55,
         'final_minimum_removable_gap': 0.75,
-        'final_edge_trim_padding': 0.55,
+        'final_edge_trim_padding': 0.65,
         'minimum_keep_segment': 1.25,
         'minimum_removed_cut': 0.25,
     },
@@ -62,11 +64,11 @@ CUT_PROFILES = [
         'name': 'strong',
         'noise': '-17dB',
         'minimum_silence': 0.50,
-        'keep_each_side': 0.22,
+        'keep_each_side': 0.30,
         'edge_trim_padding': 0.22,
         'minimum_removable_gap': 0.50,
         'final_minimum_removable_gap': 0.70,
-        'final_edge_trim_padding': 0.50,
+        'final_edge_trim_padding': 0.58,
         'minimum_keep_segment': 1.10,
         'minimum_removed_cut': 0.20,
     },
@@ -74,11 +76,11 @@ CUT_PROFILES = [
         'name': 'hard',
         'noise': '-16dB',
         'minimum_silence': 0.45,
-        'keep_each_side': 0.20,
+        'keep_each_side': 0.28,
         'edge_trim_padding': 0.20,
         'minimum_removable_gap': 0.45,
         'final_minimum_removable_gap': 0.65,
-        'final_edge_trim_padding': 0.45,
+        'final_edge_trim_padding': 0.52,
         'minimum_keep_segment': 1.00,
         'minimum_removed_cut': 0.18,
     },
@@ -166,6 +168,7 @@ def keep_intervals(total, silences, profile=None):
         else:
             merged.append((a, b))
     merged = remove_fragmenting_cuts(total, merged, profile)
+    merged = smooth_cut_cadence(total, merged)
     keeps = []
     cur = 0.0
     for a, b in merged:
@@ -207,6 +210,35 @@ def keep_segments_from_removals(total, remove):
     if cur < total:
         keeps.append((cur, total))
     return keeps
+
+def max_cuts_for_duration(total):
+    return max(3, int(total / 60 * MAX_CUTS_PER_MINUTE + 0.999))
+
+def cut_duration(cut):
+    return cut[1] - cut[0]
+
+def smooth_cut_cadence(total, remove):
+    filtered = list(remove)
+    while True:
+        close_pair = None
+        for index in range(len(filtered) - 1):
+            gap_between_cuts = filtered[index + 1][0] - filtered[index][1]
+            if gap_between_cuts < MIN_TIME_BETWEEN_CUTS:
+                close_pair = index
+                break
+        if close_pair is None:
+            break
+
+        first = filtered[close_pair]
+        second = filtered[close_pair + 1]
+        drop_index = close_pair if cut_duration(first) <= cut_duration(second) else close_pair + 1
+        filtered.pop(drop_index)
+
+    max_cuts = max_cuts_for_duration(total)
+    while len(filtered) > max_cuts:
+        drop_index = min(range(len(filtered)), key=lambda index: cut_duration(filtered[index]))
+        filtered.pop(drop_index)
+    return filtered
 
 def removed_seconds(removed):
     return sum(b - a for a, b in removed)
