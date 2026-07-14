@@ -15,14 +15,15 @@ LOG = ROOT / 'watch-and-cut.log'
 FFMPEG = os.environ.get('FFMPEG') or shutil.which('ffmpeg') or '/opt/homebrew/bin/ffmpeg'
 FFPROBE = os.environ.get('FFPROBE') or shutil.which('ffprobe') or '/opt/homebrew/bin/ffprobe'
 VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.webm', '.avi', '.mkv'}
-SILENCE_NOISE = '-22dB'
-MINIMUM_SILENCE = 0.65
-KEEP_EACH_SIDE = 0.30
+SILENCE_NOISE = '-18dB'
+MINIMUM_SILENCE = 0.55
+KEEP_EACH_SIDE = 0.24
 EDGE_TRIM_PADDING = 0.25
-MINIMUM_REMOVABLE_GAP = 0.65
+MINIMUM_REMOVABLE_GAP = 0.55
 FINAL_MINIMUM_REMOVABLE_GAP = 0.75
 FINAL_EDGE_TRIM_PADDING = 0.55
 MINIMUM_KEEP_SEGMENT = 1.25
+MINIMUM_REMOVED_CUT = 0.25
 FADE = 0.020
 DETECT_TIMEOUT_PER_MINUTE = 20
 POLL_SECONDS = 1
@@ -96,6 +97,7 @@ def keep_intervals(total, silences):
                 remove.append((min(total, start + FINAL_EDGE_TRIM_PADDING), total))
         elif gap >= max(MINIMUM_REMOVABLE_GAP, KEEP_EACH_SIDE * 2 + 0.03):
             remove.append((start + KEEP_EACH_SIDE, end - KEEP_EACH_SIDE))
+    remove = [(a, b) for a, b in remove if b - a >= MINIMUM_REMOVED_CUT]
     remove.sort()
     merged = []
     for a, b in remove:
