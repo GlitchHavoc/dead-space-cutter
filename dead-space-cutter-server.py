@@ -17,6 +17,8 @@ PORT = int(os.environ.get('DEAD_SPACE_CUTTER_PORT', '8877'))
 VIDEO_EXTS = {'.mp4', '.mov', '.m4v', '.webm', '.avi', '.mkv'}
 LOCK = threading.Lock()
 
+ThreadingHTTPServer.allow_reuse_address = True
+
 spec = importlib.util.spec_from_file_location('watch_and_cut', ROOT / 'watch-and-cut.py')
 cutter = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cutter)
